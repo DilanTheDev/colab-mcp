@@ -60,6 +60,29 @@ def parse_args(v):
         action="store_true",
         default=True,
     )
+    parser.add_argument(
+        "-t",
+        "--transport",
+        help="MCP transport: stdio (default), sse, or streamable-http.",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+    )
+    parser.add_argument(
+        "--host",
+        help="Host to bind the HTTP server to (only used with sse/streamable-http transport). Default: 0.0.0.0",
+        default="0.0.0.0",
+    )
+    parser.add_argument(
+        "--port",
+        help="Port for the HTTP server (only used with sse/streamable-http transport). Default: 8000",
+        type=int,
+        default=8000,
+    )
+    parser.add_argument(
+        "--ws-host",
+        help="Host for the Colab WebSocket server. Defaults to localhost for stdio, 0.0.0.0 for HTTP transports.",
+        default=None,
+    )
     return parser.parse_args(v)
 
 
@@ -67,16 +90,28 @@ async def main_async():
     args = parse_args(sys.argv[1:])
     init_logger(args.log)
 
+    server_mode = args.transport != "stdio"
+
+    # Default WebSocket host: localhost for stdio, 0.0.0.0 for HTTP transports
+    ws_host = args.ws_host or ("0.0.0.0" if server_mode else "localhost")
+
     if args.enable_proxy:
         logging.info("enabling session proxy tools")
-        session_mcp = ColabSessionProxy()
+        session_mcp = ColabSessionProxy(server_mode=server_mode, ws_host=ws_host)
         await session_mcp.start_proxy_server()
         mcp.mount(session_mcp.proxy_server)
         for middleware in session_mcp.middleware:
             mcp.add_middleware(middleware)
 
     try:
-        await mcp.run_async()
+        if server_mode:
+            await mcp.run_async(
+                transport=args.transport,
+                host=args.host,
+                port=args.port,
+            )
+        else:
+            await mcp.run_async()
 
     finally:
         if args.enable_proxy:

@@ -37,6 +37,9 @@ class ColabWebSocketServer:
     """
     A WebSocket server designed to accept a single connection specifically
     from a Google Colab session (colab.google.com).
+
+    In server mode (non-stdio), pass host="0.0.0.0" so Colab can reach it
+    from the browser.
     """
 
     def __init__(self, host="localhost"):

@@ -159,35 +159,60 @@ class ColabProxyMiddleware(Middleware):
             )
 
 
-async def check_session_proxy_tool_fn(ctx: Context = CurrentContext()) -> bool:
+_server_mode: bool = False
+_server_host: str = "localhost"
+
+
+async def check_session_proxy_tool_fn(ctx: Context = CurrentContext()) -> str:
     fe_connected = ctx.get_state(FE_CONNECTED_KEY)
     token = ctx.get_state(PROXY_TOKEN_KEY)
     port = ctx.get_state(PROXY_PORT_KEY)
     if fe_connected:
-        return True
-    webbrowser.open_new(
-        f"{COLAB}{SCRATCH_PATH}#mcpProxyToken={token}&mcpProxyPort={port}"
-    )
-    return False
+        return "true"
+    colab_url = f"{COLAB}{SCRATCH_PATH}#mcpProxyToken={token}&mcpProxyPort={port}"
+    if _server_mode:
+        # In server mode the host visible to the browser may differ from the bind
+        # address; expose the URL so the agent/user can open it in their browser.
+        ws_host = _server_host if _server_host != "0.0.0.0" else "<your-server-host>"
+        colab_url_with_host = (
+            f"{COLAB}{SCRATCH_PATH}"
+            f"#mcpProxyToken={token}&mcpProxyPort={port}&mcpProxyHost={ws_host}"
+        )
+        return (
+            f"Not connected. Open this URL in your browser to connect Colab: {colab_url_with_host}"
+        )
+    webbrowser.open_new(colab_url)
+    return "false"
 
 
 check_session_proxy_tool = Tool.from_function(
     fn=check_session_proxy_tool_fn,
     name=INJECTED_TOOL_NAME,
-    description="Opens a connection to a Google Colab browser session and unlocks notebook editing tools. Returns a boolean representing whether the connection attempt succeeded",
+    description=(
+        "Opens a connection to a Google Colab browser session and unlocks notebook "
+        "editing tools. In stdio mode opens the browser automatically; in server mode "
+        "returns a URL the user must open. Returns 'true' on success."
+    ),
 )
 
 
 class ColabSessionProxy:
-    def __init__(self):
+    def __init__(self, server_mode: bool = False, ws_host: str = "localhost"):
         self._exit_stack = AsyncExitStack()
         self.proxy_server: FastMCPProxy | None = None
         # list order matters, see: https://gofastmcp.com/servers/middleware#multiple-middleware
         self.middleware: list[Middleware] = []
         self.wss: ColabWebSocketServer | None = None
+        self._server_mode = server_mode
+        self._ws_host = ws_host
 
     async def start_proxy_server(self):
-        self.wss = await self._exit_stack.enter_async_context(ColabWebSocketServer())
+        import colab_mcp.session as _self_mod
+        _self_mod._server_mode = self._server_mode
+        _self_mod._server_host = self._ws_host
+        self.wss = await self._exit_stack.enter_async_context(
+            ColabWebSocketServer(host=self._ws_host)
+        )
         proxy_client = await self._exit_stack.enter_async_context(
             ColabProxyClient(self.wss)
         )
